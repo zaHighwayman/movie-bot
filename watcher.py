@@ -14,7 +14,7 @@ FINNKINO_EVENTS_URL = "https://www.finnkino.fi/xml/Events/"
 # Finnkino Schedule API — lists actual showtimes (used once movie is found)
 FINNKINO_SCHEDULE_URL = "https://www.finnkino.fi/xml/Schedule/"
 
-SEARCH_KEYWORD = "odyssey"
+SEARCH_KEYWORD = "obsession"
 
 HEADERS = {
     "User-Agent": (
