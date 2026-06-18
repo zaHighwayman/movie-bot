@@ -16,6 +16,16 @@ FINNKINO_SCHEDULE_URL = "https://www.finnkino.fi/xml/Schedule/"
 
 SEARCH_KEYWORD = "odyssey"
 
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/xml, text/xml, */*",
+    "Accept-Language": "fi-FI,fi;q=0.9,en;q=0.8",
+}
+
 # ── Telegram helpers ───────────────────────────────────────────────────────────
 
 def send_telegram(message: str):
@@ -28,6 +38,8 @@ def send_telegram(message: str):
     }
     try:
         r = requests.post(url, json=payload, timeout=10)
+        if not r.ok:
+            print(f"[{now()}] ❌ Telegram error {r.status_code}: {r.text}")
         r.raise_for_status()
         print(f"[{now()}] ✅ Telegram message sent.")
     except Exception as e:
@@ -43,7 +55,7 @@ def now():
 def fetch_events():
     """Fetch all events (movies) from Finnkino and return those matching Odyssey."""
     try:
-        r = requests.get(FINNKINO_EVENTS_URL, timeout=15)
+        r = requests.get(FINNKINO_EVENTS_URL, headers=HEADERS, timeout=15)
         r.raise_for_status()
         root = ET.fromstring(r.content)
         matches = []
@@ -71,7 +83,7 @@ def fetch_schedules(event_id: str):
     """Fetch showtimes for a specific event ID. Returns list of show dicts."""
     try:
         params = {"eventID": event_id}
-        r = requests.get(FINNKINO_SCHEDULE_URL, params=params, timeout=15)
+        r = requests.get(FINNKINO_SCHEDULE_URL, headers=HEADERS, params=params, timeout=15)
         r.raise_for_status()
         root = ET.fromstring(r.content)
         shows = []
