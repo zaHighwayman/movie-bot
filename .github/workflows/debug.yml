@@ -18,25 +18,51 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
-      - name: Test Playwright against Finnkino XML API
+      - name: Test Playwright against Finnkino
         run: |
           python3 << 'PYEOF'
+          import time
           from playwright.sync_api import sync_playwright
 
           with sync_playwright() as p:
-              browser = p.chromium.launch(headless=True)
+              browser = p.chromium.launch(
+                  headless=True,
+                  args=[
+                      "--disable-blink-features=AutomationControlled",
+                      "--no-sandbox",
+                  ]
+              )
               context = browser.new_context(
                   locale="fi-FI",
-                  user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                  timezone_id="Europe/Helsinki",
+                  viewport={"width": 1280, "height": 800},
+                  user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                  extra_http_headers={
+                      "Accept-Language": "fi-FI,fi;q=0.9,en;q=0.8",
+                  }
               )
+
+              # Remove webdriver flag
+              context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
               page = context.new_page()
 
-              print("Navigating to Finnkino XML Events...")
-              response = page.goto("https://www.finnkino.fi/xml/Events/", wait_until="networkidle")
-              print(f"Status: {response.status}")
+              # Step 1: visit homepage first like a real user
+              print("Step 1: Visiting homepage...")
+              page.goto("https://www.finnkino.fi/", timeout=30000)
+              print(f"Homepage status OK, title: {page.title()}")
+              time.sleep(3)
+
+              # Step 2: now hit the XML API
+              print("Step 2: Fetching XML events...")
+              resp = page.goto("https://www.finnkino.fi/xml/Events/", timeout=30000)
+              print(f"Status: {resp.status}")
+              time.sleep(2)
+
               content = page.content()
               print(f"Content length: {len(content)}")
-              print("First 1000 chars:")
-              print(content[:1000])
+              print("First 1500 chars:")
+              print(content[:1500])
+
               browser.close()
           PYEOF
