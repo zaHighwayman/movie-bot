@@ -7,12 +7,18 @@ jobs:
   debug:
     runs-on: ubuntu-latest
     steps:
-      - name: Check Finnkino XML API
+      - name: Try multiple Finnkino endpoints
         run: |
-          echo "=== Testing XML Events API ==="
-          curl -s -o response.xml -w "HTTP Status: %{http_code}\n" \
-            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-            -H "Accept-Language: fi-FI,fi;q=0.9" \
-            "https://www.finnkino.fi/xml/Events/"
-          echo "First 2000 chars of response:"
-          head -c 2000 response.xml
+          for URL in \
+            "https://www.finnkino.fi/xml/Events/?noBotProtection=1" \
+            "https://finnkino.fi/xml/Events/" \
+            "https://www.finnkino.fi/fi/xml/Events/" \
+            "https://www.finnkino.fi/xml/Schedule/" \
+            "https://www.finnkino.fi/rss/events/" \
+            "https://www.finnkino.fi/sitemap.xml"
+          do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "User-Agent: Mozilla/5.0" \
+              -L "$URL")
+            echo "[$STATUS] $URL"
+          done
