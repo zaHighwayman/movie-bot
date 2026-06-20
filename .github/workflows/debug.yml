@@ -18,7 +18,7 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
-      - name: Test Playwright against Finnkino
+      - name: Test Playwright - wait for Cloudflare challenge to resolve
         run: |
           python3 << 'PYEOF'
           import time
@@ -27,42 +27,49 @@ jobs:
           with sync_playwright() as p:
               browser = p.chromium.launch(
                   headless=True,
-                  args=[
-                      "--disable-blink-features=AutomationControlled",
-                      "--no-sandbox",
-                  ]
+                  args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
               )
               context = browser.new_context(
                   locale="fi-FI",
                   timezone_id="Europe/Helsinki",
                   viewport={"width": 1280, "height": 800},
                   user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                  extra_http_headers={
-                      "Accept-Language": "fi-FI,fi;q=0.9,en;q=0.8",
-                  }
+                  extra_http_headers={"Accept-Language": "fi-FI,fi;q=0.9,en;q=0.8"}
               )
-
-              # Remove webdriver flag
               context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
               page = context.new_page()
 
-              # Step 1: visit homepage first like a real user
-              print("Step 1: Visiting homepage...")
-              page.goto("https://www.finnkino.fi/", timeout=30000)
-              print(f"Homepage status OK, title: {page.title()}")
-              time.sleep(3)
+              print("Visiting homepage, waiting for Cloudflare to pass...")
+              page.goto("https://www.finnkino.fi/", timeout=60000, wait_until="commit")
 
-              # Step 2: now hit the XML API
-              print("Step 2: Fetching XML events...")
-              resp = page.goto("https://www.finnkino.fi/xml/Events/", timeout=30000)
-              print(f"Status: {resp.status}")
+              # Wait up to 15s for Cloudflare challenge to auto-solve
+              for i in range(15):
+                  time.sleep(1)
+                  title = page.title()
+                  print(f"  t={i+1}s title: {title}")
+                  if "pieni hetki" not in title.lower() and "just a moment" not in title.lower():
+                      print("  ✅ Cloudflare passed!")
+                      break
+              else:
+                  print("  ❌ Cloudflare never passed on homepage")
+
+              print(f"\nFinal homepage title: {page.title()}")
               time.sleep(2)
 
+              # Now try XML
+              print("\nFetching XML events...")
+              page.goto("https://www.finnkino.fi/xml/Events/", timeout=60000, wait_until="commit")
+              time.sleep(5)
+              print(f"XML page title: {page.title()}")
               content = page.content()
               print(f"Content length: {len(content)}")
-              print("First 1500 chars:")
-              print(content[:1500])
+              # Check if it's real XML or Cloudflare page
+              if "<?xml" in content or "<EventList" in content or "<Events" in content:
+                  print("✅ Got real XML!")
+                  print(content[:2000])
+              else:
+                  print("❌ Still blocked. First 500 chars:")
+                  print(content[:500])
 
               browser.close()
           PYEOF
