@@ -1,0 +1,18 @@
+name: Debug Finnkino API
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Finnkino XML API
+        run: |
+          echo "=== Testing XML Events API ==="
+          curl -s -o response.xml -w "HTTP Status: %{http_code}\n" \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+            -H "Accept-Language: fi-FI,fi;q=0.9" \
+            "https://www.finnkino.fi/xml/Events/"
+          echo "First 2000 chars of response:"
+          head -c 2000 response.xml
