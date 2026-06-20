@@ -1,0 +1,45 @@
+name: Odyssey Ticket Watcher
+
+on:
+  schedule:
+    # Every 5 minutes at even times: 00, 05, 10, 15...
+    # GitHub Actions minimum is every 5 min via */5
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # allows manual trigger from GitHub UI for testing
+
+jobs:
+  check:
+    runs-on: ubuntu-latest  # GitHub uses European/US runners — Finnkino should allow these
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Restore notification state
+        uses: actions/cache@v4
+        with:
+          path: notified_state.txt
+          key: notified-state-v1
+          restore-keys: notified-state-v1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run watcher
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEARCH_KEYWORD: ${{ vars.SEARCH_KEYWORD || 'odyssey' }}
+        run: python watcher.py
+
+      - name: Save notification state
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: notified_state.txt
+          key: notified-state-v1
