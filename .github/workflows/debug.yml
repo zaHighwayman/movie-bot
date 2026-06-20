@@ -7,18 +7,36 @@ jobs:
   debug:
     runs-on: ubuntu-latest
     steps:
-      - name: Try multiple Finnkino endpoints
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Playwright
         run: |
-          for URL in \
-            "https://www.finnkino.fi/xml/Events/?noBotProtection=1" \
-            "https://finnkino.fi/xml/Events/" \
-            "https://www.finnkino.fi/fi/xml/Events/" \
-            "https://www.finnkino.fi/xml/Schedule/" \
-            "https://www.finnkino.fi/rss/events/" \
-            "https://www.finnkino.fi/sitemap.xml"
-          do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              -H "User-Agent: Mozilla/5.0" \
-              -L "$URL")
-            echo "[$STATUS] $URL"
-          done
+          pip install playwright
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Test Playwright against Finnkino XML API
+        run: |
+          python3 << 'PYEOF'
+          from playwright.sync_api import sync_playwright
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True)
+              context = browser.new_context(
+                  locale="fi-FI",
+                  user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+              )
+              page = context.new_page()
+
+              print("Navigating to Finnkino XML Events...")
+              response = page.goto("https://www.finnkino.fi/xml/Events/", wait_until="networkidle")
+              print(f"Status: {response.status}")
+              content = page.content()
+              print(f"Content length: {len(content)}")
+              print("First 1000 chars:")
+              print(content[:1000])
+              browser.close()
+          PYEOF
