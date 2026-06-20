@@ -1,21 +1,18 @@
 import os
 import sys
 import requests
-import re
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
-# ── Config from environment variables ─────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 SEARCH_KEYWORD = os.getenv("SEARCH_KEYWORD", "odyssey").lower()
-# File to persist already-notified URLs across runs (via GitHub Actions cache)
 STATE_FILE = "notified_state.txt"
 
-FINNKINO_URLS = [
-    "https://www.finnkino.fi/en/movies/now-in-theatres/",
-    "https://www.finnkino.fi/en/movies/coming-soon/",
-    "https://www.finnkino.fi/en/events/",
-]
+# Finnkino XML API — lists all current & upcoming movies
+FINNKINO_EVENTS_URL = "https://www.finnkino.fi/xml/Events/"
+FINNKINO_SCHEDULE_URL = "https://www.finnkino.fi/xml/Schedule/"
 
 HEADERS = {
     "User-Agent": (
@@ -23,9 +20,8 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/125.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,*/*",
+    "Accept": "application/xml, text/xml, */*",
     "Accept-Language": "fi-FI,fi;q=0.9,en;q=0.8",
-    "Referer": "https://www.finnkino.fi/",
 }
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -38,12 +34,7 @@ def log(msg):
 
 def send_telegram(message: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": False,
-    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML", "disable_web_page_preview": False}
     r = requests.post(url, json=payload, timeout=10)
     if not r.ok:
         log(f"❌ Telegram error {r.status_code}: {r.text}")
@@ -61,101 +52,107 @@ def save_state(notified: set):
         for entry in sorted(notified):
             f.write(entry + "\n")
 
-# ── Finnkino scraping ──────────────────────────────────────────────────────────
+# ── Finnkino XML API ───────────────────────────────────────────────────────────
 
-def check_page(url: str):
+def fetch_events():
+    """Fetch all events from Finnkino XML API, return matches for keyword."""
+    r = requests.get(FINNKINO_EVENTS_URL, headers=HEADERS, timeout=20)
+    r.raise_for_status()
+    root = ET.fromstring(r.content)
+    matches = []
+    for event in root.findall(".//Event"):
+        title = (event.findtext("Title") or "").strip()
+        original = (event.findtext("OriginalTitle") or "").strip()
+        event_id = event.findtext("ID") or ""
+        rating = event.findtext("Rating") or ""
+        genres = event.findtext("Genres") or ""
+        synopsis = (event.findtext("Synopsis") or "")[:200]
+
+        if SEARCH_KEYWORD in title.lower() or SEARCH_KEYWORD in original.lower():
+            matches.append({
+                "id": event_id,
+                "title": title,
+                "original": original,
+                "rating": rating,
+                "genres": genres,
+                "synopsis": synopsis,
+            })
+    return matches
+
+def fetch_showtimes(event_id: str):
+    """Get the first few showtimes for an event."""
     try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
+        r = requests.get(FINNKINO_SCHEDULE_URL, headers=HEADERS, params={"eventID": event_id}, timeout=20)
         r.raise_for_status()
-        html = r.text
-
-        found = []
-        patterns = [
-            r'<a[^>]+title=["\']([^"\']*' + re.escape(SEARCH_KEYWORD) + r'[^"\']*)["\'][^>]*href=["\']([^"\']+)["\']',
-            r'<a[^>]+href=["\']([^"\']+)["\'][^>]+title=["\']([^"\']*' + re.escape(SEARCH_KEYWORD) + r'[^"\']*)["\']',
-            r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>\s*([^<]*' + re.escape(SEARCH_KEYWORD) + r'[^<]*)\s*</a>',
-        ]
-
-        for pat in patterns:
-            for m in re.finditer(pat, html, re.IGNORECASE):
-                groups = m.groups()
-                if len(groups) == 2:
-                    if groups[0].startswith("http") or groups[0].startswith("/"):
-                        href, title = groups[0], groups[1]
-                    else:
-                        title, href = groups[0], groups[1]
-                    title = title.strip()
-                    if not href.startswith("http"):
-                        href = "https://www.finnkino.fi" + href
-                    entry = (title, href)
-                    if entry not in found:
-                        found.append(entry)
-
-        text_only = re.sub(r'<[^>]+>', ' ', html)
-        keyword_present = SEARCH_KEYWORD in text_only.lower()
-
-        return found, keyword_present, r.status_code
-
+        root = ET.fromstring(r.content)
+        shows = []
+        for show in root.findall(".//Show"):
+            shows.append({
+                "theatre": show.findtext("Theatre") or "?",
+                "start": (show.findtext("dttmShowStart") or "").replace("T", " "),
+                "url": show.findtext("ShowURL") or "",
+            })
+        return shows
     except Exception as e:
-        log(f"⚠️  Error fetching {url}: {e}")
-        return [], False, None
-
-def check_finnkino():
-    all_matches = []
-    keyword_seen = False
-    for url in FINNKINO_URLS:
-        matches, seen, status = check_page(url)
-        log(f"Checked {url} → status={status}, matches={len(matches)}, keyword_seen={seen}")
-        all_matches.extend(matches)
-        if seen:
-            keyword_seen = True
-
-    seen_urls = set()
-    deduped = []
-    for title, href in all_matches:
-        if href not in seen_urls:
-            seen_urls.add(href)
-            deduped.append((title, href))
-
-    return deduped, keyword_seen
+        log(f"⚠️  Could not fetch showtimes for event {event_id}: {e}")
+        return []
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    log(f"🔍 Checking Finnkino for '{SEARCH_KEYWORD}'...")
+    log(f"🔍 Checking Finnkino XML API for '{SEARCH_KEYWORD}'...")
     already_notified = load_state()
 
-    matches, keyword_seen = check_finnkino()
+    try:
+        matches = fetch_events()
+    except Exception as e:
+        log(f"❌ Failed to fetch Finnkino events: {e}")
+        sys.exit(1)
 
-    if not keyword_seen and not matches:
+    log(f"Found {len(matches)} match(es) for '{SEARCH_KEYWORD}'.")
+
+    if not matches:
         log("😴 Not found yet.")
         sys.exit(0)
 
-    new_matches = [(t, u) for t, u in matches if u not in already_notified]
-    keyword_placeholder = "__keyword_seen__"
+    new_matches = [m for m in matches if m["id"] not in already_notified]
 
-    if new_matches or (keyword_seen and keyword_placeholder not in already_notified and not matches):
-        log(f"🎉 Found! Sending notification.")
+    if not new_matches:
+        log("ℹ️  Already notified about all found events.")
+        sys.exit(0)
 
-        lines = [f"🎬 <b>'{SEARCH_KEYWORD.title()}' spotted on Finnkino!</b>\n"]
-        if new_matches:
-            for title, href in new_matches:
-                lines.append(f"🎥 <b>{title}</b>")
-                lines.append(f"🎟 <a href=\"{href}\">View / Buy tickets</a>\n")
+    log(f"🎉 {len(new_matches)} new event(s) found! Sending notification.")
+
+    lines = [f"🎬 <b>'{SEARCH_KEYWORD.title()}' is now on Finnkino!</b>\n"]
+    for m in new_matches:
+        lines.append(f"🎥 <b>{m['title']}</b>")
+        if m["original"] and m["original"] != m["title"]:
+            lines.append(f"   <i>{m['original']}</i>")
+        if m["genres"]:
+            lines.append(f"   {m['genres']}")
+        if m["rating"]:
+            lines.append(f"   Rated: {m['rating']}")
+
+        shows = fetch_showtimes(m["id"])
+        if shows:
+            lines.append(f"\n📅 <b>First showtimes ({len(shows)} total):</b>")
+            for s in shows[:4]:
+                lines.append(f"  • {s['theatre']} — {s['start']}")
+                if s["url"]:
+                    lines.append(f"    🎟 <a href=\"{s['url']}\">Buy tickets</a>")
+            if len(shows) > 4:
+                lines.append(f"  … and {len(shows) - 4} more")
         else:
-            lines.append("The keyword was found on Finnkino — no direct link extracted.")
-            lines.append(f"👉 <a href=\"https://www.finnkino.fi\">Check finnkino.fi</a>")
+            lines.append("\n  (No showtimes yet — check finnkino.fi)")
 
-        send_telegram("\n".join(lines))
+        lines.append("")
 
-        for _, u in new_matches:
-            already_notified.add(u)
-        if keyword_seen and not matches:
-            already_notified.add(keyword_placeholder)
+    lines.append(f"👉 <a href=\"https://www.finnkino.fi\">finnkino.fi</a>")
+    send_telegram("\n".join(lines))
 
-        save_state(already_notified)
-    else:
-        log("ℹ️  Already notified about everything found.")
+    for m in new_matches:
+        already_notified.add(m["id"])
+    save_state(already_notified)
 
 if __name__ == "__main__":
     main()
